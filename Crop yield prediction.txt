@@ -1,0 +1,127 @@
+import numpy as np
+import pandas as pd
+import matplotlib.pyplot as plt
+from sklearn.ensemble import GradientBoostingRegressor, RandomForestRegressor
+from sklearn.tree import DecisionTreeRegressor
+from sklearn.svm import SVR
+from sklearn.model_selection import train_test_split, GridSearchCV
+from sklearn.preprocessing import StandardScaler
+from sklearn.metrics import r2_score
+
+# Load dataset
+df = pd.read_csv("Crop_Yield_Prediction_main.csv")
+
+# One-hot encode categorical columns
+dum2 = pd.get_dummies(df['Area'])
+dum3 = pd.get_dummies(df['Soil_type'])
+dum4 = pd.get_dummies(df['Crop'])
+
+# Merge the one-hot encoded columns with the original dataframe
+merged = pd.concat([df, dum2, dum3, dum4], axis='columns')
+final = merged.drop(['Area', 'Soil_type', 'Crop'], axis='columns')
+
+# Fill missing values with column means and replace inf values
+final.fillna(final.mean(), inplace=True)
+final.replace([np.inf, -np.inf], np.finfo(np.float32).max, inplace=True)
+
+# Split the data into features and target
+X = final.drop('Yield', axis=1)
+y = final['Yield']
+
+# Split the data into training and testing sets
+X_train, X_test, y_train, y_test = train_test_split(X, y, test_size=0.2, random_state=42)
+
+# Scale the features
+scaler = StandardScaler()
+X_train_scaled = scaler.fit_transform(X_train)
+X_test_scaled = scaler.transform(X_test)
+
+# Define the models and their respective hyperparameter grids
+models = {
+    'GradientBoostingRegressor': GradientBoostingRegressor(),
+    'RandomForestRegressor': RandomForestRegressor(),
+    'DecisionTreeRegressor': DecisionTreeRegressor(),
+    'SVR': SVR()
+}
+
+param_grids = {
+    'GradientBoostingRegressor': {
+        'n_estimators': [50, 100, 200, 300],
+        'max_depth': [2, 4, 6, 8],
+        'learning_rate': [0.1, 0.2]
+    },
+    'RandomForestRegressor': {
+        'n_estimators': [50, 100, 200, 300],
+        'max_depth': [2, 4, 6, 8],
+        'min_samples_split': [2, 5, 10]
+    },
+    'DecisionTreeRegressor': {
+        'max_depth': [2, 4, 6, 8],
+        'min_samples_split': [2, 5, 10]
+    },
+    'SVR': {
+        'C': [0.1, 1, 10],
+        'epsilon': [0.01, 0.1, 0.2],
+        'kernel': ['linear', 'rbf']
+    }
+}
+
+# Perform GridSearchCV for each model
+best_models = {}
+for model_name, model in models.items():
+    print(f"Tuning {model_name}...")
+    grid_search = GridSearchCV(model, param_grids[model_name], cv=5, scoring='r2', n_jobs=-1)
+    grid_search.fit(X_train_scaled, y_train)
+    best_models[model_name] = grid_search.best_estimator_
+    print(f"Best parameters for {model_name}: {grid_search.best_params_}")
+    print(f"Best R2 score for {model_name}: {grid_search.best_score_}\n")
+
+# Evaluate the best models and print results
+for model_name, model in best_models.items():
+    y_pred = model.predict(X_test_scaled)
+    r2 = r2_score(y_test, y_pred)
+    accuracy = model.score(X_test_scaled, y_test)
+    print(f"{model_name} - R2 Score: {r2}, Accuracy: {accuracy}")
+
+    # Add predictions to the test set
+    test_results = X_test.copy()
+    test_results['Actual_Yield'] = y_test
+    test_results['Predicted_Yield'] = y_pred
+
+    # Reverse one-hot encoding to get the crop names
+    crop_columns = dum4.columns
+    test_results['Crop'] = test_results[crop_columns].idxmax(axis=1).str.replace('Crop_', '')
+
+    # Generate regression report for crops
+    crop_report = test_results.groupby('Crop').agg(
+        Actual_Yield=('Actual_Yield', 'mean'),
+        Predicted_Yield=('Predicted_Yield', 'mean'),
+        Yield_Error=('Actual_Yield', lambda x: np.mean(np.abs(x - test_results['Predicted_Yield'][x.index])))
+    ).reset_index()
+
+    # Print regression report in the desired format
+    print(f"\nRegression Report for Crops using {model_name}:")
+    print(f"{'Crop Name':<15} {'Previous Yield':<15} {'Predicted Yield':<15}")
+    for index, row in crop_report.iterrows():
+        print(f"{row['Crop']:<15} {row['Actual_Yield']:<15.2f} {row['Predicted_Yield']:<15.2f}")
+
+    # Plot graphs one by one
+    # Previous Yield plot
+    plt.figure(figsize=(10, 6))
+    plt.bar(crop_report['Crop'], crop_report['Actual_Yield'], color='blue')
+    plt.title(f'Crop Type vs. Previous Yield using {model_name}')
+    plt.xlabel('Crop Type')
+    plt.ylabel('Previous Yield')
+    plt.xticks(rotation=90)
+    plt.tight_layout()
+    plt.show()
+
+    # Predicted Yield plot
+    plt.figure(figsize=(10, 6))
+    plt.bar(crop_report['Crop'], crop_report['Predicted_Yield'], color='green')
+    plt.title(f'Crop Type vs. Predicted Yield using {model_name}')
+    plt.xlabel('Crop Type')
+    plt.ylabel('Predicted Yield')
+    plt.xticks(rotation=90)
+    plt.tight_layout()
+    plt.show()
